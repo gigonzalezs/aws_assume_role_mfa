@@ -1,0 +1,120 @@
+#!/bin/bash
+
+echo
+echo
+echo "AWS_ROLE (AWS Assume Role utility) v0.1"
+
+EXECUTION_PATH=${PWD}
+
+function load_Profile() {
+  echo
+  echo "using config file: $CONFIG_FILE"
+  PROFILE=$(cat $CONFIG_FILE | jq -r '.profile') 
+  AWS_ACCOUNT=$(cat $CONFIG_FILE | jq -r '.account') 
+  AWS_TOKEN_ARN=$(cat $CONFIG_FILE | jq -r '.token')
+}
+
+function save_Profile() {
+  GLOBAL_CONFIG_DIR="$HOME/.aws_role"
+      if ! test -d "$GLOBAL_CONFIG_DIR"; then
+        mkdir "$HOME/.aws_role"
+      fi
+      echo "{\"profile\": \"$PROFILE\", \"account\": \"$AWS_ACCOUNT\", \"token\": \"$AWS_TOKEN_ARN\"}" > "$HOME/.aws_role/config"
+      echo "parameters saved to: $HOME/.aws_role/config"
+}
+
+function select_aws_profile() {
+  echo "AWS available profiles:"
+  i=0
+  PROFILES=$(cat $AWS_CREDS | grep '\[' | sed 's/\[//g' | sed 's/\]//g')
+  declare -a PROFILE_ARRAY
+  for x in $PROFILES
+  do
+    i=$((i+1))
+    echo "$i -> $x"
+    PROFILE_ARRAY[$((i))]=$x
+  done
+  echo "Select a AWS profile [1-$i]: "
+  read profile_index
+  PROFILE=${PROFILE_ARRAY[profile_index]}
+}
+
+function ask_aws_account {
+  echo "AWS Account: "
+  read AWS_ACCOUNT
+}
+
+function ask_aws_2fa {
+  echo "2FA token ARN: "
+  read AWS_TOKEN_ARN
+}
+
+function configure_Profile() {
+  echo
+  echo "Lets start setup AWS_ROLE"
+  select_aws_profile
+  ask_aws_account
+  ask_aws_2fa
+}
+
+function try_load_local_config() {
+  LOCAL_CONFIG_FILE="$EXECUTION_PATH/.aws_role.cfg"
+  if test -f "$LOCAL_CONFIG_FILE"; then
+      CONFIG_FILE=$LOCAL_CONFIG_FILE
+      load_Profile
+  fi
+}
+
+function try_load_global_config() {
+  GLOBAL_CONFIG_FILE="$HOME/.aws_role/config"
+  if test -f "$GLOBAL_CONFIG_FILE"; then
+      CONFIG_FILE=$GLOBAL_CONFIG_FILE
+      load_Profile
+  fi
+}
+
+
+
+try_load_local_config
+
+if [ -z "$CONFIG_FILE" ]
+then
+    try_load_global_config
+fi
+
+if [ -z "$CONFIG_FILE" ]
+then
+  AWS_CREDS="$HOME/.aws/credentials"
+  if test -f "$AWS_CREDS"; then
+      configure_Profile
+      save_Profile
+  else
+      echo "No AWS credentials! exiting."
+      exit 0
+  fi
+fi
+
+
+
+AWS_ROLE=$1
+if [[ -z $AWS_ROLE ]]
+ then
+  AWS_ROLE="Developer"
+fi
+
+printf "AWS Assume Role '$AWS_ROLE' for account $AWS_ACCOUNT\r\n"
+printf "AWS Profile: $PROFILE\r\n"
+printf "MFA Token ARN: $AWS_TOKEN_ARN\r\n"
+printf "MFA Token OTP:"
+read mfatoken
+AWS_CRED_JSON=$(aws --profile=$PROFILE sts assume-role --role-arn arn:aws:iam::$AWS_ACCOUNT:role/$AWS_ROLE --role-session-name $AWS_ROLE --serial-number $AWS_TOKEN_ARN --token-code $mfatoken)
+
+
+AWS_SESSION_ACCESS_KEY_ID=$(echo $AWS_CRED_JSON | jq -r '.Credentials.AccessKeyId')
+AWS_SESSION_SECRET_ACCESS_KEY=$(echo $AWS_CRED_JSON | jq -r '.Credentials.SecretAccessKey')
+AWS_SESSION_SESSION_TOKEN=$(echo $AWS_CRED_JSON | jq -r '.Credentials.SessionToken')
+
+
+export AWS_ACCESS_KEY_ID=$AWS_SESSION_ACCESS_KEY_ID;
+export AWS_SECRET_ACCESS_KEY=$AWS_SESSION_SECRET_ACCESS_KEY;
+export AWS_SESSION_TOKEN=$AWS_SESSION_SESSION_TOKEN;
